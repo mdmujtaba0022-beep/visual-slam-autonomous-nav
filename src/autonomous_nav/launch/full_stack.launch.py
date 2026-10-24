@@ -5,7 +5,7 @@ from launch.actions import (
     GroupAction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, EqualsSubstitution
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -41,7 +41,7 @@ def generate_launch_description():
 
         # SLAM Toolbox (default)
         GroupAction(
-            condition=IfCondition(slam_method),
+            condition=IfCondition(EqualsSubstitution(slam_method, 'slam_toolbox')),
             actions=[
                 IncludeLaunchDescription(
                     PythonLaunchDescriptionSource(
@@ -54,6 +54,19 @@ def generate_launch_description():
                             pkg_dir, 'config', 'slam_toolbox.yaml'
                         ),
                     }.items(),
+                ),
+            ],
+        ),
+
+        # ORB-SLAM3 visual SLAM (alternative)
+        GroupAction(
+            condition=IfCondition(EqualsSubstitution(slam_method, 'orb_slam3')),
+            actions=[
+                IncludeLaunchDescription(
+                    PythonLaunchDescriptionSource(
+                        os.path.join(pkg_dir, 'launch', 'orb_slam3.launch.py')
+                    ),
+                    launch_arguments={'use_sim_time': use_sim_time}.items(),
                 ),
             ],
         ),

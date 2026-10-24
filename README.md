@@ -90,6 +90,31 @@ ros2 launch autonomous_nav full_stack.launch.py
 ros2 launch autonomous_nav navigation.launch.py map:=./src/autonomous_nav/maps/warehouse.yaml
 ```
 
+### Custom warehouse world + waypoint mission
+
+```bash
+# Terminal 1: warehouse world (robot spawns at the origin used by the mission file)
+ros2 launch autonomous_nav warehouse_sim.launch.py
+
+# Terminal 2: explore and map it, then save the map (see below)
+ros2 launch autonomous_nav full_stack.launch.py
+
+# Or localize on the saved map and run config/warehouse_mission.yaml
+ros2 launch autonomous_nav navigation.launch.py run_mission:=true
+```
+
+### Docker (any OS, including Windows via WSLg)
+
+`docker/` contains an Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic + Nav2 + TurtleBot3 image.
+`docker/run.sh` mounts this repo at `/ws`, builds the package on first start, and forwards the
+GUI (WSLg on Windows, with GPU-accelerated OpenGL through Mesa D3D12). From Git Bash or Linux:
+
+```bash
+docker/run.sh                                     # builds the image on first run, opens a shell
+docker exec -it vslam-nav /entrypoint.sh bash     # extra terminals in the same container
+make test                                         # unit tests (inside the container)
+```
+
 ### Save a Map
 
 ```bash

@@ -8,6 +8,7 @@ until the entire environment is mapped.
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import PoseStamped
@@ -50,9 +51,13 @@ class FrontierExplorer(Node):
         self.is_navigating = False
         self.current_target = None
         self.blacklisted_frontiers = []
+        self._visited_frontiers = []
         self.consecutive_failures = 0
         self._total_goals_sent = 0
         self._total_goals_reached = 0
+        self._goal_handle = None
+        self._goal_start_time = None
+        self._timed_out = False
 
         # TF buffer for robot pose
         self._tf_buffer = tf2_ros.Buffer()
@@ -75,6 +80,7 @@ class FrontierExplorer(Node):
 
         # Exploration loop timer
         self.create_timer(recheck_interval, self.explore_step)
+        self.create_timer(1.0, self._check_goal_timeout)
 
         self.get_logger().info('Frontier explorer initialized')
 
@@ -122,8 +128,23 @@ class FrontierExplorer(Node):
         robot_pose = self._get_robot_pose()
         target = self._select_frontier(frontiers, robot_pose)
 
-        if target is not None:
-            self._navigate_to(target)
+        if target is None:
+            return
+
+        # Reaching a frontier that then doesn't clear means its unknown
+        # cells can't be observed (e.g. shadowed by an obstacle). Without
+        # this the explorer re-selects it forever.
+        if any(math.hypot(target[0] - vx, target[1] - vy)
+               < self._blacklist_radius
+               for vx, vy in self._visited_frontiers):
+            self.get_logger().warn(
+                f'Frontier ({target[0]:.2f}, {target[1]:.2f}) persists '
+                f'after being reached — blacklisting as unobservable'
+            )
+            self.blacklisted_frontiers.append(target)
+            return
+
+        self._navigate_to(target)
 
     def _detect_frontiers(self):
         """Find and cluster frontier cells in the occupancy grid."""
@@ -253,26 +274,48 @@ class FrontierExplorer(Node):
             self.consecutive_failures += 1
             return
 
+        self._goal_handle = goal_handle
+        self._goal_start_time = self.get_clock().now()
+        self._timed_out = False
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._nav_complete_cb)
+
+    def _check_goal_timeout(self):
+        """Cancel the active goal if it exceeds exploration_timeout."""
+        if self._goal_handle is None or self._goal_start_time is None:
+            return
+        elapsed = (
+            self.get_clock().now() - self._goal_start_time
+        ).nanoseconds / 1e9
+        if elapsed > self._exploration_timeout:
+            self.get_logger().warn(
+                f'Goal exceeded {self._exploration_timeout:.0f}s timeout '
+                f'— canceling and blacklisting'
+            )
+            self._timed_out = True
+            self._goal_start_time = None
+            self._goal_handle.cancel_goal_async()
 
     def _nav_complete_cb(self, future):
         result = future.result()
         status = result.status
+        self._goal_handle = None
+        self._goal_start_time = None
 
-        if status == 4:  # ABORTED
+        if status == GoalStatus.STATUS_ABORTED or self._timed_out:
             self.get_logger().warn(
                 f'Goal aborted — blacklisting '
                 f'({self.current_target[0]:.2f}, {self.current_target[1]:.2f})'
             )
             self.blacklisted_frontiers.append(self.current_target)
             self.consecutive_failures += 1
-        elif status == 6:  # CANCELED
+        elif status == GoalStatus.STATUS_CANCELED:
             self.get_logger().warn('Navigation canceled')
             self.consecutive_failures += 1
         else:
             self.get_logger().info('Reached frontier, scanning for next...')
             self._total_goals_reached += 1
+            self._visited_frontiers.append(self.current_target)
             self.consecutive_failures = 0
 
         self.is_navigating = False

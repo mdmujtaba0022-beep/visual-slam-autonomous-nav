@@ -73,11 +73,17 @@ Visualization Manager:
       Show Axes: true
       Show Arrows: false
 
-    - Class: rviz_default_plugins/Marker
+    - Class: rviz_default_plugins/MarkerArray
       Name: Waypoints
       Value: true
       Topic:
         Value: /waypoint_markers
+
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Frontiers
+      Value: true
+      Topic:
+        Value: /frontier_markers
 
   Global Options:
     Fixed Frame: map
