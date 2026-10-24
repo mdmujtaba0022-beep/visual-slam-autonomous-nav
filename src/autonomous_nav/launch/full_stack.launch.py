@@ -95,7 +95,7 @@ def generate_launch_description():
                 'min_frontier_size': 5,
                 'exploration_timeout': 30.0,
                 'blacklist_radius': 0.5,
-                'recheck_interval': 5.0,
+                'recheck_interval': 1.0,
             }],
             output='screen',
         ),

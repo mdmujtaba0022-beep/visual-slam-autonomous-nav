@@ -56,14 +56,15 @@ Built with ROS 2 Jazzy, Nav2, SLAM Toolbox and Gazebo Harmonic.
     "go map the unknown"        "visit these points"
 ```
 
-**The exploration loop** (every 5 seconds):
+**The exploration loop** (every second):
 
 1. Read the latest map.
 2. Find frontier cells and group them into clusters.
 3. Score each cluster: bigger is better, closer is better.
 4. Send the best one to Nav2 as a goal.
-5. Blacklist goals that fail, time out (30 s), or don't clear after the robot gets there.
-6. When no frontiers are left, print a summary and stop.
+5. While driving, skip to the next frontier if the current one gets mapped on the way.
+6. Blacklist goals that fail, time out (30 s), or still don't clear after two visits.
+7. When no frontiers are left, print a summary and stop.
 
 ---
 
@@ -267,13 +268,13 @@ waypoints:
 | Parameter | Default | Meaning |
 |---|---|---|
 | `min_frontier_size` | 5 cells | Ignore frontiers smaller than this (noise). |
-| `recheck_interval` | 5.0 s | How often to look for a new frontier. |
+| `recheck_interval` | 1.0 s | How often to look for a new frontier. |
 | `exploration_timeout` | 30.0 s | Give up on a goal after this long. |
 | `blacklist_radius` | 0.5 m | Skip frontiers this close to a failed goal. |
 
 ### SLAM: `config/slam_toolbox.yaml`
 
-Map resolution is 5 cm. Loop closure is on, and the map updates every 5 s.
+Map resolution is 5 cm. Loop closure is on, and the map updates every 2 s.
 
 ---
 

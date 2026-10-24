@@ -95,15 +95,152 @@ def test_reached_frontier_that_persists_gets_blacklisted():
         grid[:, :10] = 0
         node.current_map = make_grid(grid)
         sent = []
-        node._navigate_to = sent.append
-        node.explore_step()
-        assert sent == [(pytest.approx(1.0), pytest.approx(0.95))]
-        # Nav2 reports success but the map doesn't change
-        node.current_target = sent[0]
-        node._nav_complete_cb(_Future(GoalStatus.STATUS_SUCCEEDED))
+        node._navigate_to = lambda t, p=None, g=None: sent.append(t)
         node.explore_step()
         assert len(sent) == 1
+        # Nav2 reports success but the next map update doesn't change:
+        # one retry is allowed (the map may just lag), then it's blacklisted
+        for _ in range(2):
+            node.current_target = sent[-1]
+            node._nav_complete_cb(_Future(GoalStatus.STATUS_SUCCEEDED))
+            node.map_callback(make_grid(grid))
+            node.explore_step()
+        assert len(sent) == 2
         assert len(node.blacklisted_frontiers) == 1
+    finally:
+        node.destroy_node()
+
+
+def test_frontier_under_robot_does_not_stall_exploration():
+    node = FrontierExplorer()
+    try:
+        grid = np.full((20, 20), -1)
+        grid[:, :10] = 0
+        node.current_map = make_grid(grid)
+        node._get_robot_pose = lambda: (1.0, 0.95)   # on the frontier
+        sent = []
+        node._navigate_to = lambda t, p=None, g=None: sent.append(t)
+        node.explore_step()
+        assert sent == []
+        assert len(node.blacklisted_frontiers) == 1
+    finally:
+        node.destroy_node()
+
+
+def test_goal_faces_direction_of_travel():
+    node = FrontierExplorer()
+    try:
+        goals = []
+
+        class _Client:
+            def wait_for_server(self, timeout_sec):
+                return True
+
+            def send_goal_async(self, goal):
+                goals.append(goal)
+                return _FutureStub()
+
+        class _FutureStub:
+            def add_done_callback(self, cb):
+                pass
+
+        node._nav_client = _Client()
+        node._navigate_to((0.0, 2.0), robot_pose=(0.0, 0.0))
+        q = goals[0].pose.pose.orientation
+        assert utils.quaternion_to_yaw(q) == pytest.approx(math.pi / 2)
+    finally:
+        node.destroy_node()
+
+
+def test_preempts_goal_once_frontier_is_mapped():
+    node = FrontierExplorer()
+    try:
+        grid = np.full((20, 20), -1)
+        grid[:, :10] = 0
+        node.current_map = make_grid(grid)
+        node._detect_frontiers()
+        target = (1.05, 0.95)
+        assert node._frontier_near(target)
+
+        canceled = []
+
+        class _Handle:
+            def cancel_goal_async(self):
+                canceled.append(True)
+
+        node.is_navigating = True
+        node.current_target = target
+        node._goal_handle = _Handle()
+        node._preempt_if_explored()          # still a frontier: keep going
+        assert canceled == []
+
+        grid[:, :] = 0                       # area got mapped en route,
+        grid[9, 11] = -1                     # leaving a 1-cell speckle
+        node.current_map = make_grid(grid)
+        node._preempt_if_explored()
+        assert canceled == [True]
+        # Our own cancel is not a failure and doesn't blacklist
+        node._nav_complete_cb(_Future(GoalStatus.STATUS_CANCELED))
+        assert node.blacklisted_frontiers == []
+        assert node.consecutive_failures == 0
+        assert not node.is_navigating
+    finally:
+        node.destroy_node()
+
+
+def test_waits_for_fresh_map_after_reaching_goal():
+    node = FrontierExplorer()
+    try:
+        grid = np.full((20, 20), -1)
+        grid[:, :10] = 0
+        node.current_map = make_grid(grid)
+        node.current_target = (1.05, 0.95)
+        node._nav_complete_cb(_Future(GoalStatus.STATUS_SUCCEEDED))
+        sent = []
+        node._navigate_to = lambda t, p=None, g=None: sent.append(t)
+        node.explore_step()
+        assert sent == [] and node.blacklisted_frontiers == []
+        # The next map message releases it (here the frontier was cleared)
+        node.map_callback(make_grid(np.zeros((20, 20))))
+        node.explore_step()
+        assert node._wait_map_count is None
+    finally:
+        node.destroy_node()
+
+
+def test_fresh_map_wait_is_capped():
+    """SLAM publishes nothing new while the robot is still: don't hang."""
+    node = FrontierExplorer()
+    try:
+        grid = np.full((20, 20), -1)
+        grid[:, :10] = 0
+        node.current_map = make_grid(grid)
+        node.current_target = (5.0, 5.0)
+        node._nav_complete_cb(_Future(GoalStatus.STATUS_SUCCEEDED))
+        node._wait_map_deadline = node.get_clock().now()   # cap elapsed
+        sent = []
+        node._navigate_to = lambda t, p=None, g=None: sent.append(t)
+        node.explore_step()
+        assert len(sent) == 1
+    finally:
+        node.destroy_node()
+
+
+def test_preemption_reference_is_a_real_frontier_cell():
+    """A C-shaped frontier's centroid is far from its cells."""
+    node = FrontierExplorer()
+    try:
+        grid = np.full((30, 30), -1)
+        grid[5:25, 5:25] = 100         # wall block
+        grid[3, 3:27] = 0              # free strip above,
+        grid[3:27, 3] = 0              # left,
+        grid[26, 3:27] = 0             # and below the block
+        node.current_map = make_grid(grid)
+        frontiers = node._detect_frontiers()
+        assert frontiers
+        for f in frontiers:
+            rep = node._rep_lookup[(f['x'], f['y'])]
+            assert node._frontier_near(rep)
     finally:
         node.destroy_node()
 

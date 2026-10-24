@@ -8,6 +8,7 @@ until the entire environment is mapped.
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.duration import Duration
 from action_msgs.msg import GoalStatus
 from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
@@ -27,7 +28,7 @@ class FrontierExplorer(Node):
         self.declare_parameter('min_frontier_size', 5)
         self.declare_parameter('exploration_timeout', 30.0)
         self.declare_parameter('blacklist_radius', 0.5)
-        self.declare_parameter('recheck_interval', 5.0)
+        self.declare_parameter('recheck_interval', 1.0)
 
         self._min_frontier_size = (
             self.get_parameter('min_frontier_size')
@@ -58,6 +59,13 @@ class FrontierExplorer(Node):
         self._goal_handle = None
         self._goal_start_time = None
         self._timed_out = False
+        self._preempted = False
+        self._map_count = 0
+        self._wait_map_count = None
+        self._wait_map_deadline = None
+        self._frontier_mask = None
+        self._rep_lookup = {}
+        self._current_rep = None
 
         # TF buffer for robot pose
         self._tf_buffer = tf2_ros.Buffer()
@@ -86,6 +94,7 @@ class FrontierExplorer(Node):
 
     def map_callback(self, msg: OccupancyGrid):
         self.current_map = msg
+        self._map_count += 1
 
     def _get_robot_pose(self):
         """Get robot position in map frame via TF."""
@@ -109,7 +118,18 @@ class FrontierExplorer(Node):
             return
 
         if self.is_navigating:
+            self._preempt_if_explored()
             return
+
+        # After reaching a goal, wait for the next map update so it
+        # includes what the robot saw there; otherwise a stale map makes the
+        # frontier look unobservable. Capped, because SLAM Toolbox doesn't
+        # publish anything new while the robot stands still.
+        if self._wait_map_count is not None:
+            if (self._map_count <= self._wait_map_count
+                    and self.get_clock().now() < self._wait_map_deadline):
+                return
+            self._wait_map_count = None
 
         if self.consecutive_failures > 5:
             self.get_logger().warn(
@@ -129,14 +149,25 @@ class FrontierExplorer(Node):
         target = self._select_frontier(frontiers, robot_pose)
 
         if target is None:
+            # Every remaining frontier is right under the robot and still
+            # hasn't cleared: it can't be observed from here. Without this
+            # nothing is ever selectable again and the explorer idles.
+            for c in frontiers:
+                self.get_logger().warn(
+                    f"Frontier ({c['x']:.2f}, {c['y']:.2f}) is at the robot "
+                    f'but not clearing — blacklisting as unobservable'
+                )
+                self.blacklisted_frontiers.append((c['x'], c['y']))
             return
 
-        # Reaching a frontier that then doesn't clear means its unknown
-        # cells can't be observed (e.g. shadowed by an obstacle). Without
-        # this the explorer re-selects it forever.
-        if any(math.hypot(target[0] - vx, target[1] - vy)
-               < self._blacklist_radius
-               for vx, vy in self._visited_frontiers):
+        # Reaching a frontier that still doesn't clear after a second visit
+        # means its unknown cells can't be observed (e.g. shadowed by an
+        # obstacle). Without this the explorer re-selects it forever.
+        visits = sum(
+            math.hypot(target[0] - vx, target[1] - vy) < self._blacklist_radius
+            for vx, vy in self._visited_frontiers
+        )
+        if visits >= 2:
             self.get_logger().warn(
                 f'Frontier ({target[0]:.2f}, {target[1]:.2f}) persists '
                 f'after being reached — blacklisting as unobservable'
@@ -144,7 +175,40 @@ class FrontierExplorer(Node):
             self.blacklisted_frontiers.append(target)
             return
 
-        self._navigate_to(target)
+        self._navigate_to(target, robot_pose)
+        self._current_rep = self._rep_lookup.get(target, target)
+
+    def _preempt_if_explored(self):
+        """Cancel the active goal once its frontier has been mapped.
+
+        The laser sees well ahead of the robot, so a frontier often clears
+        while the robot is still driving to it.
+        """
+        if (self._goal_handle is None or self._preempted
+                or self.current_target is None):
+            return
+        self._detect_frontiers()
+        if self._frontier_near(self._current_rep or self.current_target):
+            return
+        self.get_logger().info(
+            f'Frontier ({self.current_target[0]:.2f}, '
+            f'{self.current_target[1]:.2f}) already explored — moving on'
+        )
+        self._preempted = True
+        self._goal_handle.cancel_goal_async()
+
+    def _frontier_near(self, target):
+        """True if any frontier cell lies within blacklist_radius of target."""
+        if self._frontier_mask is None:
+            return True
+        info = self.current_map.info
+        col = int((target[0] - info.origin.position.x) / info.resolution)
+        row = int((target[1] - info.origin.position.y) / info.resolution)
+        r = max(1, int(self._blacklist_radius / info.resolution))
+        window = self._frontier_mask[
+            max(0, row - r):row + r + 1, max(0, col - r):col + r + 1
+        ]
+        return bool(window.any())
 
     def _detect_frontiers(self):
         """Find and cluster frontier cells in the occupancy grid."""
@@ -163,6 +227,7 @@ class FrontierExplorer(Node):
 
         frontier_coords = np.argwhere(frontier_mask)
         if len(frontier_coords) == 0:
+            self._frontier_mask = np.zeros_like(frontier_mask)
             return []
 
         return self._cluster_frontiers(frontier_coords)
@@ -175,9 +240,15 @@ class FrontierExplorer(Node):
         )
         grid[coords[:, 0], coords[:, 1]] = True
         labeled, n_clusters = ndimage.label(grid)
+        # Only clusters big enough to count; single-cell SLAM speckles
+        # would otherwise make every spot look unexplored.
+        sizes = ndimage.sum(grid, labeled, range(1, n_clusters + 1))
+        keep = np.flatnonzero(sizes >= self._min_frontier_size) + 1
+        self._frontier_mask = np.isin(labeled, keep)
 
         info = self.current_map.info
         clusters = []
+        self._rep_lookup = {}
 
         for i in range(1, n_clusters + 1):
             cluster_cells = np.argwhere(labeled == i)
@@ -188,6 +259,17 @@ class FrontierExplorer(Node):
             # Convert grid coords (row, col) to world coords (x, y)
             wx = info.origin.position.x + centroid[1] * info.resolution
             wy = info.origin.position.y + centroid[0] * info.resolution
+            # The centroid of a curved frontier can sit away from every
+            # frontier cell, so remember a real one for preemption checks.
+            # (The centroid stays the goal: it often lies through a gap,
+            # which is what gets the robot into a narrow entrance.)
+            nearest = cluster_cells[
+                np.argmin(((cluster_cells - centroid) ** 2).sum(axis=1))
+            ]
+            self._rep_lookup[(wx, wy)] = (
+                info.origin.position.x + (nearest[1] + 0.5) * info.resolution,
+                info.origin.position.y + (nearest[0] + 0.5) * info.resolution,
+            )
 
             # Skip blacklisted locations
             if self._is_blacklisted(wx, wy):
@@ -240,18 +322,27 @@ class FrontierExplorer(Node):
 
         return best
 
-    def _navigate_to(self, target):
+    def _navigate_to(self, target, robot_pose=None):
         """Send a navigation goal to Nav2."""
         self.is_navigating = True
         self.current_target = target
+        self._current_rep = None
+        self._preempted = False
         self._total_goals_sent += 1
+        gx, gy = target
 
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = 'map'
         goal.pose.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.pose.position.x = target[0]
-        goal.pose.pose.position.y = target[1]
-        goal.pose.pose.orientation.w = 1.0
+        goal.pose.pose.position.x = gx
+        goal.pose.pose.position.y = gy
+        # Face along the direction of travel so the robot doesn't spin on
+        # the spot at the goal to match an arbitrary heading.
+        yaw = 0.0
+        if robot_pose is not None:
+            yaw = math.atan2(gy - robot_pose[1], gx - robot_pose[0])
+        goal.pose.pose.orientation.z = math.sin(yaw / 2.0)
+        goal.pose.pose.orientation.w = math.cos(yaw / 2.0)
 
         self.get_logger().info(
             f'[{self._total_goals_sent}] Navigating to frontier '
@@ -302,7 +393,11 @@ class FrontierExplorer(Node):
         self._goal_handle = None
         self._goal_start_time = None
 
-        if status == GoalStatus.STATUS_ABORTED or self._timed_out:
+        if self._preempted and not self._timed_out:
+            # We canceled it ourselves because the frontier got mapped
+            self._preempted = False
+            self.consecutive_failures = 0
+        elif status == GoalStatus.STATUS_ABORTED or self._timed_out:
             self.get_logger().warn(
                 f'Goal aborted — blacklisting '
                 f'({self.current_target[0]:.2f}, {self.current_target[1]:.2f})'
@@ -315,6 +410,9 @@ class FrontierExplorer(Node):
         else:
             self.get_logger().info('Reached frontier, scanning for next...')
             self._total_goals_reached += 1
+            self._wait_map_count = self._map_count
+            self._wait_map_deadline = \
+                self.get_clock().now() + Duration(seconds=3.0)
             self._visited_frontiers.append(self.current_target)
             self.consecutive_failures = 0
 
