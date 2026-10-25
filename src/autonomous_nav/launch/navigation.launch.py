@@ -1,6 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -14,6 +15,8 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_file = LaunchConfiguration('map')
     nav2_params = LaunchConfiguration('nav2_params')
+    run_mission = LaunchConfiguration('run_mission')
+    mission_file = LaunchConfiguration('mission_file')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -31,6 +34,18 @@ def generate_launch_description():
             default_value=os.path.join(pkg_dir, 'config', 'nav2_params.yaml'),
             description='Nav2 parameter file',
         ),
+        DeclareLaunchArgument(
+            'run_mission',
+            default_value='false',
+            description='Start the waypoint mission once Nav2 is up',
+        ),
+        DeclareLaunchArgument(
+            'mission_file',
+            default_value=os.path.join(
+                pkg_dir, 'config', 'warehouse_mission.yaml'
+            ),
+            description='Waypoint mission YAML',
+        ),
 
         # Launch Nav2 bringup with AMCL localization and saved map
         IncludeLaunchDescription(
@@ -42,6 +57,19 @@ def generate_launch_description():
                 'map': map_file,
                 'params_file': nav2_params,
             }.items(),
+        ),
+
+        # Multi-waypoint mission executor
+        Node(
+            condition=IfCondition(run_mission),
+            package='autonomous_nav',
+            executable='waypoint_manager',
+            name='waypoint_manager',
+            parameters=[{
+                'use_sim_time': True,
+                'waypoints_file': mission_file,
+            }],
+            output='screen',
         ),
 
         # RViz2

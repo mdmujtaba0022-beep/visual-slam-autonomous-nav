@@ -5,7 +5,7 @@ waypoints:
   - {x:  3.5, y:  4.0, yaw: 0.0,    label: "Open area NE"}
   - {x:  5.0, y:  0.0, yaw: -1.57,  label: "Right shelves"}
   - {x:  5.0, y: -4.0, yaw: 3.14,   label: "SE corner"}
-  - {x: -1.0, y: -4.0, yaw: 3.14,   label: "Pillar area"}
+  - {x: -1.8, y: -4.0, yaw: 3.14,   label: "Pillar area"}  # pillar_1 sits at (-1, -4)
   - {x: -4.5, y:  0.0, yaw: 1.57,   label: "West zone"}
   - {x: -5.0, y:  3.5, yaw: 0.0,    label: "Narrow passage"}
   - {x:  0.0, y:  0.0, yaw: 0.0,    label: "Return to start"}

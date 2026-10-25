@@ -6,6 +6,7 @@ from rclpy.action import ActionClient
 from nav2_msgs.action import FollowWaypoints
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
+import copy
 import yaml
 import math
 
@@ -41,6 +42,8 @@ class WaypointManager(Node):
         # Start mission after a brief delay for Nav2 to initialize
         self.create_timer(3.0, self._start_mission_once)
         self._mission_started = False
+        self._retries_left = 20
+        self._retry_timer = None
 
     def _load_waypoints(self, filepath):
         """Load waypoints from a YAML file."""
@@ -85,6 +88,12 @@ class WaypointManager(Node):
         )
         future.add_done_callback(self._goal_response_cb)
 
+    def _retry_mission(self):
+        self._retry_timer.cancel()
+        self.destroy_timer(self._retry_timer)
+        self._retry_timer = None
+        self.execute_mission()
+
     def _feedback_cb(self, feedback_msg):
         current = feedback_msg.feedback.current_waypoint
         self.get_logger().info(
@@ -94,6 +103,15 @@ class WaypointManager(Node):
     def _goal_response_cb(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
+            # The action server exists before the lifecycle manager
+            # activates it, and an inactive server rejects goals.
+            if self._retries_left > 0:
+                self._retries_left -= 1
+                self.get_logger().warn(
+                    'Mission rejected (Nav2 not active yet?) — retrying in 5s'
+                )
+                self._retry_timer = self.create_timer(5.0, self._retry_mission)
+                return
             self.get_logger().error('Mission rejected by Nav2!')
             return
 
@@ -130,7 +148,7 @@ class WaypointManager(Node):
             marker.id = i
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
-            marker.pose = wp.pose
+            marker.pose = copy.deepcopy(wp.pose)
             marker.scale.x = 0.2
             marker.scale.y = 0.2
             marker.scale.z = 0.2
@@ -148,7 +166,8 @@ class WaypointManager(Node):
             text_marker.id = i
             text_marker.type = Marker.TEXT_VIEW_FACING
             text_marker.action = Marker.ADD
-            text_marker.pose = wp.pose
+            # Copy so the label offset doesn't mutate the mission goal
+            text_marker.pose = copy.deepcopy(wp.pose)
             text_marker.pose.position.z = 0.5
             text_marker.scale.z = 0.2
             text_marker.color.r = 1.0

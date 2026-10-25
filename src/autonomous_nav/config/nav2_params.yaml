@@ -1,3 +1,29 @@
+# Used by navigation.launch.py (localization on a saved map). The initial
+# pose matches the spawn point in warehouse_sim.launch.py.
+amcl:
+  ros__parameters:
+    use_sim_time: true
+    base_frame_id: "base_footprint"
+    global_frame_id: "map"
+    odom_frame_id: "odom"
+    scan_topic: scan
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    laser_model_type: "likelihood_field"
+    max_beams: 60
+    min_particles: 500
+    max_particles: 2000
+    laser_max_range: 3.5
+    update_min_d: 0.25
+    update_min_a: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    set_initial_pose: true
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
 bt_navigator:
   ros__parameters:
     use_sim_time: true
@@ -15,6 +41,8 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: true
+    # Gazebo Harmonic's TurtleBot3 bridge takes TwistStamped on /cmd_vel
+    enable_stamped_cmd_vel: true
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
@@ -91,6 +119,8 @@ planner_server:
 behavior_server:
   ros__parameters:
     use_sim_time: true
+    # Gazebo Harmonic's TurtleBot3 bridge takes TwistStamped on /cmd_vel
+    enable_stamped_cmd_vel: true
     local_costmap_topic: local_costmap/costmap_raw
     global_costmap_topic: global_costmap/costmap_raw
     local_footprint_topic: local_costmap/published_footprint
@@ -196,6 +226,8 @@ smoother_server:
 velocity_smoother:
   ros__parameters:
     use_sim_time: true
+    # Gazebo Harmonic's TurtleBot3 bridge takes TwistStamped on /cmd_vel
+    enable_stamped_cmd_vel: true
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
@@ -211,6 +243,8 @@ velocity_smoother:
 collision_monitor:
   ros__parameters:
     use_sim_time: true
+    # Gazebo Harmonic's TurtleBot3 bridge takes TwistStamped on /cmd_vel
+    enable_stamped_cmd_vel: true
     base_frame_id: "base_footprint"
     odom_frame_id: "odom"
     cmd_vel_in_topic: "cmd_vel_smoothed"
@@ -261,6 +295,8 @@ route_server:
 docking_server:
   ros__parameters:
     use_sim_time: true
+    # Gazebo Harmonic's TurtleBot3 bridge takes TwistStamped on /cmd_vel
+    enable_stamped_cmd_vel: true
     controller_frequency: 50.0
     initial_perception_timeout: 5.0
     wait_charge_timeout: 5.0

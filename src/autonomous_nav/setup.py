@@ -22,6 +22,7 @@ setup(
             glob('maps/*.yaml') + glob('maps/*.pgm')),
     ],
     install_requires=['setuptools'],
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='nick',
     maintainer_email='nick@todo.com',

@@ -25,7 +25,7 @@ slam_toolbox:
     stack_size_to_use: 40000000
 
     # Map update params
-    map_update_interval: 5.0
+    map_update_interval: 2.0
     enable_interactive_mode: true
 
     # General params

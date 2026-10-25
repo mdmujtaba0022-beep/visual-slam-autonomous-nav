@@ -12,6 +12,8 @@
     </plugin>
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <!-- Required for the TurtleBot3 IMU sensor to publish -->
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
 
     <light type="directional" name="sun">
       <cast_shadows>true</cast_shadows>

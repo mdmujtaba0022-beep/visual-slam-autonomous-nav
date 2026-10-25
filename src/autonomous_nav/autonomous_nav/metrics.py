@@ -190,9 +190,10 @@ def compare_maps(generated_pgm: str, ground_truth_pgm: str) -> dict:
         )
         gt = np.array(gt_img)
 
-    # Binarize: free space = white (>200) = 1
-    gen_free = (gen > 200).astype(int)
-    gt_free = (gt > 200).astype(int)
+    # Binarize: free space = white = 1. map_saver writes unknown as 205,
+    # so the threshold must sit above it or unknown counts as free.
+    gen_free = (gen > 205).astype(int)
+    gt_free = (gt > 205).astype(int)
 
     intersection = int(np.sum(gen_free & gt_free))
     union = int(np.sum(gen_free | gt_free))
